@@ -683,8 +683,9 @@ def predict(model, positive_prompt, negative_prompt, width, height, guidance_sca
 #    if SD35Storage.pipe.vae == None:
 #        
 
-    SD35Storage.pipe.transformer.to('cuda')
-    SD35Storage.pipe.vae.to('cpu')
+    if model == '(medium)':
+        SD35Storage.pipe.transformer.to('cuda')
+        SD35Storage.pipe.vae.to('cpu')
 
 
     shape = (
@@ -790,7 +791,8 @@ def predict(model, positive_prompt, negative_prompt, width, height, guidance_sca
         if SD35Storage.loadedLora == True:
             SD35Storage.pipe.unload_lora_weights()
             SD35Storage.loadedLora = False
-        SD35Storage.pipe.transformer.to('cpu')
+        if model == '(medium)':
+            SD35Storage.pipe.transformer.to('cpu')
 #        SD35Storage.pipe.controlnet.to('cpu')
     else:
         SD35Storage.pipe.transformer = None
@@ -801,7 +803,8 @@ def predict(model, positive_prompt, negative_prompt, width, height, guidance_sca
     gc.collect()
     torch.cuda.empty_cache()
 
-    SD35Storage.pipe.vae.to('cuda')
+    if model == '(medium)':
+        SD35Storage.pipe.vae.to('cuda')
 
 #    SD35Storage.pipe.vae.enable_slicing()       #   tiling works once only?
 
