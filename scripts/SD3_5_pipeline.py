@@ -94,7 +94,6 @@ def rescale_noise_cfg(noise_cfg, noise_pred_text, guidance_rescale=0.0):
     return noise_cfg
 
 class SD35Pipeline_DoE_combined (DiffusionPipeline, SD3LoraLoaderMixin, FromSingleFileMixin, PAGMixin):
-#    model_cpu_offload_seq = "text_encoder->text_encoder_2->text_encoder_3->transformer->vae"
     model_cpu_offload_seq = "transformer->controlnet->vae"
     _optional_components = []
     _callback_tensor_inputs = ["latents", "prompt_embeds", "negative_prompt_embeds", "negative_pooled_prompt_embeds"]
@@ -418,9 +417,6 @@ class SD35Pipeline_DoE_combined (DiffusionPipeline, SD3LoraLoaderMixin, FromSing
                 timestep = t.expand(latent_model_input.shape[0])
 
                 if self.controlnet != None and thisStep >= control_guidance_start and thisStep <= control_guidance_end:
-#                    if self.controlnet.config.extra_conditioning_channels == 1: #   inpaint model is large
-#                        self.transformer.to('cpu')
-#                        self.controlnet.to('cuda')
                     # controlnet inference
                     control_block_samples = self.controlnet(
                         hidden_states               =   latent_model_input,
@@ -432,9 +428,6 @@ class SD35Pipeline_DoE_combined (DiffusionPipeline, SD3LoraLoaderMixin, FromSing
                         conditioning_scale          =   controlnet_conditioning_scale,
                         return_dict                 =   False,
                     )[0]
-#                    if self.controlnet.config.extra_conditioning_channels == 1:
-#                        self.controlnet.to('cpu')
-#                        self.transformer.to('cuda')
                 else:
                     control_block_samples = None
 

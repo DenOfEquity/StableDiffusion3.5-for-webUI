@@ -195,21 +195,19 @@ def predict(model, positive_prompt, negative_prompt, width, height, guidance_sca
     
     ####    controlnet
     useControlNet = None
+    if model == '(medium)': # any 3rd party?
+        controlNet = 0
+
     match controlNet:
         case 1:
             if controlNetImage and controlNetStrength > 0.0:
-                useControlNet = 'InstantX/SD3-Controlnet-Canny'
+                useControlNet = 'stabilityai/stable-diffusion-3.5-large-controlnet-blur'
         case 2:
             if controlNetImage and controlNetStrength > 0.0:
-                useControlNet = 'InstantX/SD3-Controlnet-Pose'
+                useControlNet = 'stabilityai/stable-diffusion-3.5-large-controlnet-canny'
         case 3:
             if controlNetImage and controlNetStrength > 0.0:
-                useControlNet = 'InstantX/SD3-Controlnet-Tile'
-        case 4:
-            if i2iSource and maskSource and controlNetStrength > 0.0:
-                controlNetImage = i2iSource
-                i2iSource = None
-                useControlNet = 'alimama-creative/SD3-Controlnet-Inpainting'
+                useControlNet = 'stabilityai/stable-diffusion-3.5-large-controlnet-depth'
         case _:
             controlNetStrength = 0.0
     if useControlNet:
@@ -558,17 +556,9 @@ def predict(model, positive_prompt, negative_prompt, width, height, guidance_sca
                                                                 )
     if useControlNet:
         if useControlNet != SD35Storage.lastControlNet:
-            if controlNet == 4:
-                controlnet=SD3ControlNetModel.from_pretrained(
-                    useControlNet, torch_dtype=torch.float16,
-                    extra_conditioning_channels=1,
-#                    low_cpu_mem_usage=False,
-#                    ignore_mismatched_sizes=True
-                )
-            else:
-                controlnet=SD3ControlNetModel.from_pretrained(
-                    useControlNet, torch_dtype=torch.float16,
-                )
+            controlnet=SD3ControlNetModel.from_pretrained(
+                useControlNet, torch_dtype=torch.float16,
+            )
     else:
         controlnet = None
 
@@ -622,12 +612,7 @@ def predict(model, positive_prompt, negative_prompt, width, height, guidance_sca
         SD35Storage.lastModel = model
         SD35Storage.lastControlNet = useControlNet
 
-#        SD35Storage.pipe.enable_sequential_cpu_offload()
-
-#        if controlNet == 4: #SD35Storage.noUnload:    #for very low VRAM only, not needed for 8GB
-#            SD35Storage.pipe.enable_sequential_cpu_offload()
-#        else:
-#            SD35Storage.pipe.enable_model_cpu_offload()
+#        SD35Storage.pipe.enable_model_cpu_offload()
 
         SD35Storage.pipe.vae.to(memory_format=torch.channels_last)
     else:       #   do have pipe
@@ -671,22 +656,10 @@ def predict(model, positive_prompt, negative_prompt, width, height, guidance_sca
             )
             
         SD35Storage.lastModel = model
-#        if controlNet == 4: #SD35Storage.noUnload:    #for very low VRAM only, not needed for 8GB
-#            SD35Storage.pipe.enable_sequential_cpu_offload()
-#        else:
-#            SD35Storage.pipe.enable_model_cpu_offload()
-
-#    SD35Storage.pipe.enable_sequential_cpu_offload()
-#    SD35Storage.pipe.enable_model_cpu_offload()
-
-    #   same for VAE? currently not cleared (only ~170MB in fp16)
-#    if SD35Storage.pipe.vae == None:
-#        
 
     if model == '(medium)':
         SD35Storage.pipe.transformer.to('cuda')
         SD35Storage.pipe.vae.to('cpu')
-
 
     shape = (
         num_images,
@@ -793,7 +766,6 @@ def predict(model, positive_prompt, negative_prompt, width, height, guidance_sca
             SD35Storage.loadedLora = False
         if model == '(medium)':
             SD35Storage.pipe.transformer.to('cpu')
-#        SD35Storage.pipe.controlnet.to('cpu')
     else:
         SD35Storage.pipe.transformer = None
         SD35Storage.lastModel = None
@@ -1295,18 +1267,12 @@ def on_ui_tabs():
                         initialNoiseA = gradio.Slider(minimum=0, maximum=0.1, value=0.0, step=0.001, label='strength')
                         sharpNoise = ToolButton(value="s", variant='secondary', tooltip='Sharpen initial noise')
 
-                with gradio.Accordion(label='ControlNet', open=False, visible=False):
+                with gradio.Accordion(label='ControlNet', open=False, visible=True):
                     with gradio.Row():
                         CNSource = gradio.Image(label='control image', sources=['upload'], type='pil', interactive=True, show_download_button=False)
                         with gradio.Column():
-                            CNMethod = gradio.Dropdown(['(None)',
-                                                        'canny',
-                                                        'pose',
-                                                        'tile',
-#                                                        'inpaint (uses image to image source and mask)',
-                                                        ], 
+                            CNMethod = gradio.Dropdown(['(None)', 'blur (large)', 'canny (large)', 'depth (large)'], 
                                                         label='method', value='(None)', type='index', multiselect=False, scale=1)
-                                                        #, 'inpaint (uses image to image source and mask)'
                             CNStrength = gradio.Slider(label='Strength', minimum=0.00, maximum=1.0, step=0.01, value=0.8)
                             CNStart = gradio.Slider(label='Start step', minimum=0.00, maximum=1.0, step=0.01, value=0.0)
                             CNEnd = gradio.Slider(label='End step', minimum=0.00, maximum=1.0, step=0.01, value=0.8)
