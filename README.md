@@ -19,10 +19,12 @@ Forge2 already has newer versions for all.
 
 >[!IMPORTANT]
 > **Also needs a huggingface access token:**
-> Sign up / log in, go to your profile, create an access token. **Read** type is all you need, avoid the much more complicated **Fine-grained** option. Copy the token. Make a textfile called `huggingface_access_token.txt` in the main webui folder, e.g. `{forge install directory}\webui`, and paste the token in there. You will also need to accept the terms on the [SD3.5 repository page](https://huggingface.co/stabilityai/stable-diffusion-3.5-medium). Same for large, large-turbo. And for SD3, if not already done - I re-use the text encoders from SD3, to save some GB if you have them downloaded already. And for the controlnets.
+> Sign up / log in, go to your profile, create an access token. **Read** type is all you need, avoid the much more complicated **Fine-grained** option. Copy the token. Make a textfile called `huggingface_access_token.txt` in the main webui folder, e.g. `{forge install directory}\webui`, and paste the token in there. You will also need to accept the terms on the [SD3.5 repository page](https://huggingface.co/stabilityai/stable-diffusion-3.5-medium). Same for large, large-turbo. And for the controlnets (untested).
 
 >[!NOTE]
 > Do not download the single file models, this extension cannot use them.
+
+If available, I re-use the text encoders from SD3, to save some GB if you have them downloaded already. 
 
 ---
 <details>
