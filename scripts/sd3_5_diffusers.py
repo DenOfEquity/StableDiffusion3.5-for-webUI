@@ -69,7 +69,9 @@ import modules.infotext_utils as parameters_copypaste
 
 ##   diffusers / transformers necessary imports
 from transformers import CLIPTextModelWithProjection, CLIPTokenizer, T5EncoderModel, T5TokenizerFast, T5ForConditionalGeneration
-from diffusers import FlowMatchEulerDiscreteScheduler, SD3Transformer2DModel
+from diffusers import SD3Transformer2DModel
+from diffusers import DPMSolverMultistepScheduler, FlowMatchEulerDiscreteScheduler, FlowMatchHeunDiscreteScheduler#, SASolverScheduler
+
 from diffusers.models.controlnet_sd3 import SD3ControlNetModel, SD3MultiControlNetModel
 from diffusers.utils.torch_utils import randn_tensor
 from diffusers.utils import logging
@@ -82,12 +84,12 @@ import customStylesListSD3_5 as styles
 import scripts.SD3_5_pipeline as pipeline
 
 # modules/processing.py
-def create_infotext(model, positive_prompt, negative_prompt, guidance_scale, guidance_rescale, PAG_scale, PAG_adapt, shift, clipskip, steps, seed, width, height, loraSettings, controlNetSettings):
+def create_infotext(model, sampler, positive_prompt, negative_prompt, guidance_scale, guidance_rescale, PAG_scale, PAG_adapt, shift, clipskip, steps, seed, width, height, loraSettings, controlNetSettings):
     generation_params = {
         "Steps"         :   steps,
         "Size"          :   f"{width}x{height}",
         "Seed"          :   seed,
-        "CFG Scale"     :   f"{guidance_scale} ({guidance_rescale})",
+        "CFG scale"     :   f"{guidance_scale} ({guidance_rescale})",
         "PAG"           :   f"{PAG_scale} ({PAG_adapt})",
         "Shift"         :   f"{shift}",
         "CLIP skip"     :   f"{clipskip}",
@@ -97,6 +99,7 @@ def create_infotext(model, positive_prompt, negative_prompt, guidance_scale, gui
         "CLIP-G"        :   '✓' if SD35Storage.useCG else '✗',
         "T5"            :   '✓' if SD35Storage.useT5 else '✗', #2713, 2717
         "zero negative" :   '✓' if SD35Storage.ZN else '✗',
+        "Sampler": f"{sampler}",
     }
 #add loras list and scales
 
@@ -107,7 +110,7 @@ def create_infotext(model, positive_prompt, negative_prompt, guidance_scale, gui
 
     return f"{prompt_text}{generation_params_text}{noise_text}, Model (StableDiffusion3.5): {model}"
 
-def predict(model, positive_prompt, negative_prompt, width, height, guidance_scale, guidance_rescale, shift, clipskip, 
+def predict(model, sampler, positive_prompt, negative_prompt, width, height, guidance_scale, guidance_rescale, shift, clipskip, 
             num_steps, sampling_seed, num_images, style, i2iSource, i2iDenoise, maskType, maskSource, maskBlur, maskCutOff, 
             controlNet, controlNetImage, controlNetStrength, controlNetStart, controlNetEnd, PAG_scale, PAG_adapt):
 
@@ -260,7 +263,7 @@ def predict(model, positive_prompt, negative_prompt, width, height, guidance_sca
     sourceSD3 = "stabilityai/stable-diffusion-3-medium-diffusers"
     sourceLarge = "stabilityai/stable-diffusion-3.5-large"
     sourceTurbo = "stabilityai/stable-diffusion-3.5-large-turbo"
-    sourceMedium = "stabilityai/stable-diffusion-3.5-medium"
+    sourceMedium = "stabilityai/stable-diffusion-3.5-medium"        # used for all text_encoders, to avoid duplicates
     
     match model:
         case "(large)":
@@ -285,11 +288,11 @@ def predict(model, positive_prompt, negative_prompt, width, height, guidance_sca
         ####    start T5 text encoder
         if SD35Storage.useT5 == True:
             tokenizer = T5TokenizerFast.from_pretrained(
-                source, local_files_only=localFilesOnly,
+                sourceMedium, local_files_only=localFilesOnly,
                 subfolder='tokenizer_3',
                 torch_dtype=torch.float16,
                 max_length=512,
-                use_auth_token=access_token,
+                token=access_token,
             )
 
             input_ids = tokenizer(
@@ -328,16 +331,16 @@ def predict(model, positive_prompt, negative_prompt, width, height, guidance_sca
                             subfolder='text_encoder_3',
                             torch_dtype=torch.float16,
                             device_map=device_map,
-                            use_auth_token=access_token,
+                            token=access_token,
                         )
                     except:
                         try:    #   some potential to error here, if available VRAM changes while loading device_map could be wrong
                             SD35Storage.teT5  = T5EncoderModel.from_pretrained(
-                                source, local_files_only=localFilesOnly,
+                                sourceMedium, local_files_only=localFilesOnly,
                                 subfolder='text_encoder_3',
                                 torch_dtype=torch.float16,
                                 device_map=device_map,
-                                use_auth_token=access_token,
+                                token=access_token,
                             )
                         except:
                             print ("SD3.5: loading T5 failed, likely low VRAM at moment of load. Try again, and/or: close other programs, reload/restart webUI, use 'keep models loaded' option.")
@@ -370,10 +373,10 @@ def predict(model, positive_prompt, negative_prompt, width, height, guidance_sca
         ####    start CLIP-G
         if SD35Storage.useCG == True:
             tokenizer = CLIPTokenizer.from_pretrained(
-                source, local_files_only=localFilesOnly,
+                sourceMedium, local_files_only=localFilesOnly,
                 subfolder='tokenizer',
                 torch_dtype=torch.float16,
-                use_auth_token=access_token,
+                token=access_token,
             )
 
             input_ids = tokenizer(
@@ -396,7 +399,7 @@ def predict(model, positive_prompt, negative_prompt, width, height, guidance_sca
                             customModel, local_files_only=localFilesOnly,
                             subfolder='text_encoder',
                             torch_dtype=torch.float16,
-                            use_auth_token=access_token,
+                            token=access_token,
                         )
                     except:
                         SD35Storage.teCG = None
@@ -407,15 +410,15 @@ def predict(model, positive_prompt, negative_prompt, width, height, guidance_sca
                         subfolder='text_encoder',
                         low_cpu_mem_usage=True,
                         torch_dtype=torch.float16,
-                        use_auth_token=access_token,
+                        token=access_token,
                     )
                 except:
                     SD35Storage.teCG = CLIPTextModelWithProjection.from_pretrained(
-                        source, local_files_only=localFilesOnly,
+                        sourceMedium, local_files_only=localFilesOnly,
                         subfolder='text_encoder',
                         low_cpu_mem_usage=True,
                         torch_dtype=torch.float16,
-                        use_auth_token=access_token,
+                        token=access_token,
                     )
             SD35Storage.teCG.to('cuda')
 
@@ -446,10 +449,10 @@ def predict(model, positive_prompt, negative_prompt, width, height, guidance_sca
         ####    start CLIP-L
         if SD35Storage.useCL == True:
             tokenizer = CLIPTokenizer.from_pretrained(
-                source, local_files_only=localFilesOnly,
+                sourceMedium, local_files_only=localFilesOnly,
                 subfolder='tokenizer_2',
                 torch_dtype=torch.float16,
-                use_auth_token=access_token,
+                token=access_token,
             )
             input_ids = tokenizer(
                 [positive_prompt_2, negative_prompt_2],          padding='max_length', max_length=77, truncation=True,
@@ -471,7 +474,7 @@ def predict(model, positive_prompt, negative_prompt, width, height, guidance_sca
                             customModel, local_files_only=localFilesOnly,
                             subfolder='text_encoder_2',
                             torch_dtype=torch.float16,
-                            use_auth_token=access_token,
+                            token=access_token,
                         )
                     except:
                         SD35Storage.teCL = None
@@ -482,15 +485,15 @@ def predict(model, positive_prompt, negative_prompt, width, height, guidance_sca
                         subfolder='text_encoder_2',
                         low_cpu_mem_usage=True,
                         torch_dtype=torch.float16,
-                        use_auth_token=access_token,
+                        token=access_token,
                     )
                 except:
                     SD35Storage.teCL = CLIPTextModelWithProjection.from_pretrained(
-                        source, local_files_only=localFilesOnly,
+                        sourceMedium, local_files_only=localFilesOnly,
                         subfolder='text_encoder_2',
                         low_cpu_mem_usage=True,
                         torch_dtype=torch.float16,
-                        use_auth_token=access_token,
+                        token=access_token,
                     )
 
             SD35Storage.teCL.to('cuda')
@@ -551,11 +554,6 @@ def predict(model, positive_prompt, negative_prompt, width, height, guidance_sca
 
     ####    end useCachedEmbeds
 
-    scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(source,
-                                                                subfolder='scheduler', local_files_only=localFilesOnly,
-                                                                shift=shift,
-                                                                token=access_token,
-                                                                )
     if useControlNet:
         if useControlNet != SD35Storage.lastControlNet:
             controlnet=SD3ControlNetModel.from_pretrained(
@@ -577,7 +575,6 @@ def predict(model, positive_prompt, negative_prompt, width, height, guidance_sca
                 torch_dtype=torch.float16,
                 low_cpu_mem_usage=True,                
                 use_safetensors=True,
-                scheduler=scheduler,
                 token=access_token,
                 controlnet=controlnet,
                 device_map='balanced'
@@ -589,7 +586,6 @@ def predict(model, positive_prompt, negative_prompt, width, height, guidance_sca
                 torch_dtype=torch.float16,
                 low_cpu_mem_usage=True,                
                 use_safetensors=True,
-                scheduler=scheduler,
                 token=access_token,
                 controlnet=None,
             )
@@ -602,7 +598,6 @@ def predict(model, positive_prompt, negative_prompt, width, height, guidance_sca
                 low_cpu_mem_usage=True,                
                 use_safetensors=True,
                 transformer=SD3Transformer2DModel.from_single_file(customModel, local_files_only=True, low_cpu_mem_usage=True, torch_dtype=torch.float16),
-                scheduler=scheduler,
                 token=access_token,
                 controlnet=controlnet,
             )
@@ -610,11 +605,10 @@ def predict(model, positive_prompt, negative_prompt, width, height, guidance_sca
         SD35Storage.lastControlNet = useControlNet
 
     else:       #   do have pipe
-        SD35Storage.pipe.scheduler = scheduler
         SD35Storage.pipe.controlnet = controlnet
         SD35Storage.lastControlNet = useControlNet
 
-    del scheduler, controlnet
+    del controlnet
 
     if model == '(medium)':
         SD35Storage.pipe.transformer.to('cuda')
@@ -665,6 +659,31 @@ def predict(model, positive_prompt, negative_prompt, width, height, guidance_sca
 
         del imageR, imageG, imageB, image, image_latents
     #   end: colour the initial noise
+
+    schedulerConfig = dict(SD35Storage.pipe.scheduler.config)
+    schedulerConfig['flow_shift'] = shift
+
+    if sampler == "Euler":
+        schedulerConfig.pop('algorithm_type', None) 
+        scheduler = FlowMatchEulerDiscreteScheduler.from_config(schedulerConfig)
+    elif sampler == "Heun":
+        schedulerConfig.pop('algorithm_type', None) 
+        scheduler = FlowMatchHeunDiscreteScheduler.from_config(schedulerConfig)
+    # elif sampler == "SA-solver":
+        # schedulerConfig['algorithm_type'] = 'data_prediction'
+        # scheduler = SASolverScheduler.from_config(schedulerConfig)
+    else:
+        schedulerConfig['algorithm_type'] = 'dpmsolver++'
+        schedulerConfig['prediction_type'] = 'flow_prediction'
+        schedulerConfig['use_flow_sigmas'] = True
+        # schedulerConfig['solver_order'] = 2
+        # schedulerConfig['solver_type'] = "midpoint"
+        # schedulerConfig['beta_end'] = 0.02
+        # schedulerConfig['beta_schedule'] = "linear"
+        # schedulerConfig['beta_start'] = 0.0001
+        scheduler = DPMSolverMultistepScheduler.from_config(schedulerConfig)
+
+    SD35Storage.pipe.scheduler = scheduler
 
 
 #   load in LoRA, weight passed to pipe
@@ -752,7 +771,7 @@ def predict(model, positive_prompt, negative_prompt, width, height, guidance_sca
     for i in range (total):
         print (f'SD3.5: VAE: {i+1} of {total}', end='\r', flush=True)
         info=create_infotext(
-            model, combined_positive, combined_negative, 
+            model, sampler, combined_positive, combined_negative, 
             guidance_scale, guidance_rescale,
             PAG_scale, PAG_adapt, 
             shift, clipskip, num_steps, 
@@ -839,7 +858,10 @@ def on_ui_tabs():
         return index
 
     def getGalleryText (gallery, index, seed):
-        return gallery[index][1], seed+index
+        if gallery:
+            return gallery[index][1], seed+index
+        else:
+            return "", seed+index
         
     def i2iSetDimensions (image, w, h):
         if image is not None:
@@ -1017,7 +1039,7 @@ def on_ui_tabs():
         return gradio.Button.update(value='...', variant='secondary', interactive=False), gradio.Button.update(interactive=False)
 
 
-    def parsePrompt (positive, negative, width, height, seed, steps, CFG, CFGrescale, PAG_scale, PAG_adapt, shift, nr, ng, nb, ns, loraName, loraScale):
+    def parsePrompt (positive, negative, sampler, width, height, seed, steps, CFG, CFGrescale, PAG_scale, PAG_adapt, shift, nr, ng, nb, ns, loraName, loraScale):
         p = positive.split('\n')
         lineCount = len(p)
 
@@ -1110,9 +1132,13 @@ def on_ui_tabs():
                             if len(pairs) == 3:
                                 loraName = pairs[1]
                                 loraScale = float(pairs[2].strip('\(\)'))
-                            
+                        case "Sampler:":
+                            if len(pairs) == 3:
+                                sampler = f"{pairs[1]} {pairs[2]}"
+                            else:
+                                sampler = pairs[1]
                         #clipskip?
-        return positive, negative, width, height, seed, steps, CFG, CFGrescale, PAG_scale, PAG_adapt, shift, nr, ng, nb, ns, loraName, loraScale
+        return positive, negative, sampler, width, height, seed, steps, CFG, CFGrescale, PAG_scale, PAG_adapt, shift, nr, ng, nb, ns, loraName, loraScale
 
     def style2prompt (prompt, style):
         splitPrompt = prompt.split('|')
@@ -1174,6 +1200,7 @@ def on_ui_tabs():
                     CL = ToolButton(value='CL', variant='primary',   tooltip='use CLIP-L text encoder')
                     CG = ToolButton(value='CG', variant='primary',   tooltip='use CLIP-G text encoder')
                     T5 = ToolButton(value='T5', variant='secondary', tooltip='use T5 text encoder')
+                    sampler = gradio.Dropdown(["DPM++ 2M", "Euler", "Heun"], label='Sampler', value="Euler", type='value', scale=0)
 
                 with gradio.Row():
                     positive_prompt = gradio.Textbox(label='Prompt', placeholder='Enter a prompt here ...', lines=1.01)
@@ -1193,8 +1220,8 @@ def on_ui_tabs():
 
                 with gradio.Row():
                     width = gradio.Slider(label='Width', minimum=512, maximum=2048, step=32, value=1024)
-                    swapper = ToolButton(value='\U000021C4')
                     height = gradio.Slider(label='Height', minimum=512, maximum=2048, step=32, value=1024)
+                    swapper = ToolButton(value='\U000021C4')
                     dims = gradio.Dropdown([f'{i} \u00D7 {j}' for i,j in resolutionList],
                                         label='Quickset', type='index', scale=0)
 
@@ -1280,10 +1307,10 @@ def on_ui_tabs():
                     unloadModels = gradio.Button(value='unload models', tooltip='force unload of models', scale=1)
 
                 if SD35Storage.forgeCanvas:
-                    ctrls = [model, positive_prompt, negative_prompt, width, height, guidance_scale, CFGrescale, shift, clipskip, steps, sampling_seed, batch_size, style, i2iSource.background, i2iDenoise, maskType, i2iSource.foreground, maskBlur, maskCut, CNMethod, CNSource, CNStrength, CNStart, CNEnd, PAG_scale, PAG_adapt]
+                    ctrls = [model, sampler, positive_prompt, negative_prompt, width, height, guidance_scale, CFGrescale, shift, clipskip, steps, sampling_seed, batch_size, style, i2iSource.background, i2iDenoise, maskType, i2iSource.foreground, maskBlur, maskCut, CNMethod, CNSource, CNStrength, CNStart, CNEnd, PAG_scale, PAG_adapt]
                 else:
-                    ctrls = [model, positive_prompt, negative_prompt, width, height, guidance_scale, CFGrescale, shift, clipskip, steps, sampling_seed, batch_size, style, i2iSource, i2iDenoise, maskType, maskSource, maskBlur, maskCut, CNMethod, CNSource, CNStrength, CNStart, CNEnd, PAG_scale, PAG_adapt]
-                parseable = [positive_prompt, negative_prompt, width, height, sampling_seed, steps, guidance_scale, CFGrescale, PAG_scale, PAG_adapt, shift, initialNoiseR, initialNoiseG, initialNoiseB, initialNoiseA, lora, scale]
+                    ctrls = [model, sampler, positive_prompt, negative_prompt, width, height, guidance_scale, CFGrescale, shift, clipskip, steps, sampling_seed, batch_size, style, i2iSource, i2iDenoise, maskType, maskSource, maskBlur, maskCut, CNMethod, CNSource, CNStrength, CNStart, CNEnd, PAG_scale, PAG_adapt]
+                parseable = [positive_prompt, negative_prompt, sampler, width, height, sampling_seed, steps, guidance_scale, CFGrescale, PAG_scale, PAG_adapt, shift, initialNoiseR, initialNoiseG, initialNoiseB, initialNoiseA, lora, scale]
 
             with gradio.Column():
                 generate_button = gradio.Button(value="Generate", variant='primary', visible=True)
