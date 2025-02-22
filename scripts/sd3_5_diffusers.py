@@ -1,12 +1,3 @@
-#### THIS IS THE main BRANCH - deletes models after use / keep loaded now optional
-
-#todo: check VRAM, different paths
-#   low <= 6GB enable_sequential_model_offload() on pipe
-#   medium 8-10/12? as is
-#   high 16         - everything fully to GPU while running, CLIPs + transformer to cpu after use (T5 stay GPU)
-#   very high 24+   - everything to GPU, noUnload (lock setting?)
-
-
 from diffusers.utils import check_min_version
 check_min_version("0.31.0")
 
@@ -66,6 +57,8 @@ try:
 except:
     SD35Storage.forgeCanvas = False
     canvas_head = ""
+
+from PIL import Image, ImageFilter
 
 ##   from webui
 from modules import script_callbacks, images, shared
@@ -265,9 +258,19 @@ def predict(model, positive_prompt, negative_prompt, width, height, guidance_sca
     fixed_seed = get_fixed_seed(-1 if SD35Storage.randomSeed else sampling_seed)
 
     sourceSD3 = "stabilityai/stable-diffusion-3-medium-diffusers"
-    source = "stabilityai/stable-diffusion-3.5-large"
+    sourceLarge = "stabilityai/stable-diffusion-3.5-large"
     sourceTurbo = "stabilityai/stable-diffusion-3.5-large-turbo"
     sourceMedium = "stabilityai/stable-diffusion-3.5-medium"
+    
+    match model:
+        case "(large)":
+            source = sourceLarge
+        case "(large-turbo)":
+            source = sourceTurbo
+        case "(medium)":
+            source = sourceMedium
+        case _:
+            source = sourceMedium
 
     useCachedEmbeds = (SD35Storage.combined_positive == combined_positive and
                        SD35Storage.combined_negative == combined_negative and
@@ -301,10 +304,10 @@ def predict(model, positive_prompt, negative_prompt, width, height, guidance_sca
 
             if SD35Storage.teT5 == None:             #   model not loaded
                 if SD35Storage.noUnload == True:     #   will keep model loaded
-                    device_map = {  #   how to find which blocks are most important? if any?
+                    device_map = {
                         'shared': 0,
                         'encoder.embed_tokens': 0,
-                        'encoder.block.0': 0,   'encoder.block.1': 0,   'encoder.block.2': 0,   'encoder.block.3': 0, 
+                        'encoder.block.0': 'cpu',   'encoder.block.1': 'cpu',   'encoder.block.2': 'cpu',   'encoder.block.3': 'cpu', 
                         'encoder.block.4': 'cpu',   'encoder.block.5': 'cpu',   'encoder.block.6': 'cpu',   'encoder.block.7': 'cpu', 
                         'encoder.block.8': 'cpu',   'encoder.block.9': 'cpu',   'encoder.block.10': 'cpu',  'encoder.block.11': 'cpu', 
                         'encoder.block.12': 'cpu',  'encoder.block.13': 'cpu',  'encoder.block.14': 'cpu',  'encoder.block.15': 'cpu', 
@@ -360,7 +363,6 @@ def predict(model, positive_prompt, negative_prompt, width, height, guidance_sca
             print ("SD3.5: encoding prompt (T5) ... done")
         else:
             #dim 1 (512) is tokenizer max length from config; dim 2 (4096) is transformer joint_attention_dim from its config
-            #why max_length - it's not used, so make it small (or None)
             positive_embeds_3 = torch.zeros((1, 1, 4096),    device='cuda', dtype=torch.float16, )
             negative_embeds_3 = torch.zeros((1, 1, 4096),    device='cuda', dtype=torch.float16, )
         ####    end T5
@@ -562,8 +564,13 @@ def predict(model, positive_prompt, negative_prompt, width, height, guidance_sca
     else:
         controlnet = None
 
+    if model != SD35Storage.lastModel:
+        SD35Storage.pipe = None
+        gc.collect()
+        torch.cuda.empty_cache()
+
     if SD35Storage.pipe == None:
-        if model == '(large)':
+        if model in ["(large)", "(large-turbo)"]:
             SD35Storage.pipe = pipeline.SD35Pipeline_DoE_combined.from_pretrained(
                 source,
                 local_files_only=localFilesOnly,
@@ -575,28 +582,18 @@ def predict(model, positive_prompt, negative_prompt, width, height, guidance_sca
                 controlnet=controlnet,
                 device_map='balanced'
             )
-        elif model == '(large-turbo)':
+        elif model in ["(medium)"]:
             SD35Storage.pipe = pipeline.SD35Pipeline_DoE_combined.from_pretrained(
-                sourceTurbo,
+                source,
                 local_files_only=localFilesOnly,
                 torch_dtype=torch.float16,
                 low_cpu_mem_usage=True,                
                 use_safetensors=True,
                 scheduler=scheduler,
                 token=access_token,
-                controlnet=controlnet
+                controlnet=None,
             )
-        elif model == '(medium)':
-            SD35Storage.pipe = pipeline.SD35Pipeline_DoE_combined.from_pretrained(
-                sourceMedium,
-                local_files_only=localFilesOnly,
-                torch_dtype=torch.float16,
-                low_cpu_mem_usage=True,                
-                use_safetensors=True,
-                scheduler=scheduler,
-                token=access_token,
-                controlnet=controlnet
-            )
+            SD35Storage.pipe.enable_model_cpu_offload()
         else:
             SD35Storage.pipe = pipeline.SD35Pipeline_DoE_combined.from_pretrained(
                 source,
@@ -607,55 +604,17 @@ def predict(model, positive_prompt, negative_prompt, width, height, guidance_sca
                 transformer=SD3Transformer2DModel.from_single_file(customModel, local_files_only=True, low_cpu_mem_usage=True, torch_dtype=torch.float16),
                 scheduler=scheduler,
                 token=access_token,
-                controlnet=controlnet
+                controlnet=controlnet,
             )
         SD35Storage.lastModel = model
         SD35Storage.lastControlNet = useControlNet
 
-#        SD35Storage.pipe.enable_model_cpu_offload()
-
-        SD35Storage.pipe.vae.to(memory_format=torch.channels_last)
     else:       #   do have pipe
         SD35Storage.pipe.scheduler = scheduler
         SD35Storage.pipe.controlnet = controlnet
         SD35Storage.lastControlNet = useControlNet
 
     del scheduler, controlnet
-
-
-    if model != SD35Storage.lastModel:
-        print ("SD3.5: loading transformer ...", end="\r", flush=True)
-        del SD35Storage.pipe.transformer
-        if model == '(large)':
-            SD35Storage.pipe.transformer=SD3Transformer2DModel.from_pretrained(
-                source,
-                subfolder='transformer',
-                low_cpu_mem_usage=True, 
-                torch_dtype=torch.float16
-            )
-        elif model == '(large-turbo)':
-            SD35Storage.pipe.transformer=SD3Transformer2DModel.from_pretrained(
-                sourceTurbo,
-                subfolder='transformer',
-                low_cpu_mem_usage=True, 
-                torch_dtype=torch.float16
-            )
-        elif model == '(medium)':
-            SD35Storage.pipe.transformer=SD3Transformer2DModel.from_pretrained(
-                sourceMedium,
-                subfolder='transformer',
-                low_cpu_mem_usage=True, 
-                torch_dtype=torch.float16
-            )
-        else:
-            SD35Storage.pipe.transformer=SD3Transformer2DModel.from_single_file(
-                customModel,
-                local_files_only=True,
-                low_cpu_mem_usage=True,
-                torch_dtype=torch.float16
-            )
-            
-        SD35Storage.lastModel = model
 
     if model == '(medium)':
         SD35Storage.pipe.transformer.to('cuda')
@@ -702,7 +661,7 @@ def predict(model, positive_prompt, negative_prompt, width, height, guidance_sca
             for c in range(4):
                 latents[b][c] -= latents[b][c].mean()
 
-        torch.lerp (latents, image_latents, SD35Storage.noiseRGBA[3], out=latents)
+        torch.lerp (latents, image_latents, SD35Storage.noiseRGBA[3] * 0.25, out=latents)
 
         del imageR, imageG, imageB, image, image_latents
     #   end: colour the initial noise
@@ -714,7 +673,7 @@ def predict(model, positive_prompt, negative_prompt, width, height, guidance_sca
         try:
             SD35Storage.pipe.load_lora_weights(lorafile, local_files_only=True, adapter_name=SD35Storage.lora)
             SD35Storage.loadedLora = True
-#            pipe.set_adapters(SD35Storage.lora, adapter_weights=SD35Storage.lora_scale)    #.set_adapters doesn't exist so no easy multiple LoRAs and weights
+#            SD35Storage.pipe.set_adapters(SD35Storage.lora, adapter_weights=SD35Storage.lora_scale)    #.set_adapters doesn't exist so no easy multiple LoRAs and weights
         except:
             print ("Failed: LoRA: " + lorafile)
             #   no reason to abort, just carry on without LoRA
@@ -756,7 +715,7 @@ def predict(model, positive_prompt, negative_prompt, width, height, guidance_sca
 
 #            joint_attention_kwargs          = {"scale": SD35Storage.lora_scale }
         )
-        del controlNetImage, i2iSource, maskSource
+        del controlNetImage
 
     del generator, latents
 
@@ -777,8 +736,6 @@ def predict(model, positive_prompt, negative_prompt, width, height, guidance_sca
 
     if model == '(medium)':
         SD35Storage.pipe.vae.to('cuda')
-
-#    SD35Storage.pipe.vae.enable_slicing()       #   tiling works once only?
 
     if SD35Storage.lora != "(None)" and SD35Storage.lora_scale != 0.0:
         loraSettings = SD35Storage.lora + f" ({SD35Storage.lora_scale})"
@@ -828,8 +785,7 @@ def predict(model, positive_prompt, negative_prompt, width, height, guidance_sca
     opts.samples_filename_pattern = original_samples_filename_pattern
 
     if not SD35Storage.noUnload:
-        SD35Storage.pipe.scheduler = None    #   always loading scheduler, to set shift
-        #   not deleting pipe, just contents of pipe: save update check
+        SD35Storage.pipe = None
     
     del output
     gc.collect()
@@ -1236,9 +1192,9 @@ def on_ui_tabs():
                     batch_size = gradio.Number(label='Batch Size', minimum=1, maximum=9, value=1, precision=0, scale=0)
 
                 with gradio.Row():
-                    width = gradio.Slider(label='Width', minimum=512, maximum=2048, step=32, value=1024, scale=2)
+                    width = gradio.Slider(label='Width', minimum=512, maximum=2048, step=32, value=1024)
                     swapper = ToolButton(value='\U000021C4')
-                    height = gradio.Slider(label='Height', minimum=512, maximum=2048, step=32, value=1024, scale=2)
+                    height = gradio.Slider(label='Height', minimum=512, maximum=2048, step=32, value=1024)
                     dims = gradio.Dropdown([f'{i} \u00D7 {j}' for i,j in resolutionList],
                                         label='Quickset', type='index', scale=0)
 
